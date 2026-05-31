@@ -2107,7 +2107,8 @@
 
           <article class="growth-card">
             <strong>源核共鸣成长</strong>
-            <p>成长点：<span id="currencyStat">0</span></p>
+            <p>成长点：<span id="currencyStat">0</span> · 当前元素：<span id="growthTypeStat">普通</span></p>
+            <div class="growth-row" id="growthTypeRow"></div>
             <div class="growth-row" id="growthRow"></div>
           </article>
 
@@ -2229,6 +2230,7 @@
         progress: "ripple-catastrophe-progress"
       };
       const BOSS_INTERVAL = 60;
+      const TYPE_ORDER = ["normal", "fire", "ice", "thunder", "blackhole", "slash"];
       const TYPE_LABELS = {
         normal: "普通",
         fire: "火焰",
@@ -2401,6 +2403,7 @@
       const buffBar = document.getElementById("buffBar");
       const toast = document.getElementById("toast");
       const orientationNote = document.getElementById("orientationNote");
+      const growthTypeRow = document.getElementById("growthTypeRow");
       const growthRow = document.getElementById("growthRow");
       const typeTags = document.getElementById("typeTags");
 
@@ -2429,6 +2432,7 @@
         bestComboStat: document.getElementById("bestComboStat"),
         bestWaveStat: document.getElementById("bestWaveStat"),
         currencyStat: document.getElementById("currencyStat"),
+        growthTypeStat: document.getElementById("growthTypeStat"),
         achievementCountStat: document.getElementById("achievementCountStat"),
         achievementOverview: document.getElementById("achievementOverview"),
         leaderboardList: document.getElementById("leaderboardList"),
@@ -3982,6 +3986,120 @@
         };
       }
 
+      function createEmptyPermanentBoostSet() {
+        return {
+          waveSize: 0,
+          waveSpeed: 0,
+          scoreBonus: 0,
+          ultCharge: 0
+        };
+      }
+
+      function createDefaultPermanentBoosts() {
+        const boosts = {};
+        TYPE_ORDER.forEach((type) => {
+          boosts[type] = createEmptyPermanentBoostSet();
+        });
+        return boosts;
+      }
+
+      function normalizePermanentBoosts(raw) {
+        const boosts = createDefaultPermanentBoosts();
+        const source = raw && typeof raw === "object" ? raw : {};
+        const hasTypedShape = TYPE_ORDER.some((type) => source[type] && typeof source[type] === "object");
+        if (hasTypedShape) {
+          TYPE_ORDER.forEach((type) => {
+            GROWTHS.forEach((item) => {
+              boosts[type][item.key] = Number.isFinite(source[type] && source[type][item.key]) ? source[type][item.key] : 0;
+            });
+          });
+          return boosts;
+        }
+        GROWTHS.forEach((item) => {
+          boosts.normal[item.key] = Number.isFinite(source[item.key]) ? source[item.key] : 0;
+        });
+        return boosts;
+      }
+
+      function getSelectedGrowthType() {
+        return TYPE_ORDER.includes(app.progress.selectedGrowthType) ? app.progress.selectedGrowthType : "normal";
+      }
+
+      function getPermanentBoostsForType(type) {
+        const targetType = TYPE_ORDER.includes(type) ? type : "normal";
+        const boosts = app.progress && app.progress.permanentBoosts ? app.progress.permanentBoosts : null;
+        return boosts && boosts[targetType] ? boosts[targetType] : createEmptyPermanentBoostSet();
+      }
+
+      function upgradePermanentBoost(type, key) {
+        const item = GROWTHS.find((entry) => entry.key === key);
+        if (!item || !TYPE_ORDER.includes(type)) {
+          return { ok: false, reason: "invalid" };
+        }
+        const boosts = getPermanentBoostsForType(type);
+        if (boosts[key] >= item.max) {
+          return { ok: false, reason: "max" };
+        }
+        if (app.progress.metaCurrency < item.cost) {
+          return { ok: false, reason: "currency" };
+        }
+        app.progress.metaCurrency -= item.cost;
+        app.progress.permanentBoosts[type][key] += 1;
+        saveProgress();
+        return { ok: true, value: app.progress.permanentBoosts[type][key] };
+      }
+
+      function renderGrowthTypeButtons(container, selectedType, onSelect) {
+        if (!container) {
+          return;
+        }
+        container.innerHTML = "";
+        TYPE_ORDER.forEach((type) => {
+          const btn = document.createElement("button");
+          const active = type === selectedType;
+          btn.className = "btn " + (active ? "btn-accent" : "btn-secondary");
+          btn.textContent = TYPE_LABELS[type];
+          btn.title = TYPE_LABELS[type] + "成长";
+          btn.addEventListener("click", () => {
+            if (typeof onSelect === "function") {
+              onSelect(type);
+            }
+          });
+          container.appendChild(btn);
+        });
+      }
+
+      function renderGrowthUpgradeButtons(targetRow, selectedType, options) {
+        if (!targetRow) {
+          return;
+        }
+        const config = options || {};
+        const boosts = getPermanentBoostsForType(selectedType);
+        targetRow.innerHTML = "";
+        GROWTHS.forEach((item) => {
+          const value = boosts[item.key];
+          const canUpgrade = value < item.max && app.progress.metaCurrency >= item.cost;
+          const btn = document.createElement("button");
+          btn.className = "btn " + (canUpgrade ? "btn-accent" : "btn-secondary");
+          btn.textContent = item.label + " " + value + "/" + item.max + " · " + item.cost + "点";
+          btn.title = TYPE_LABELS[selectedType] + " · " + item.desc;
+          btn.disabled = !canUpgrade;
+          btn.addEventListener("click", () => {
+            const result = upgradePermanentBoost(selectedType, item.key);
+            if (!result.ok) {
+              return;
+            }
+            focusDemoScene(GROWTH_DEMO_SCENES[item.key] || 4);
+            showToast(TYPE_LABELS[selectedType] + " · " + item.label + "提升至 Lv." + result.value, 1.2);
+            syncProgressUI();
+            if (typeof config.onUpgrade === "function") {
+              config.onUpgrade();
+            }
+          });
+          targetRow.appendChild(btn);
+        });
+      }
+
       function loadProgress() {
         const data = safeParse(localStorage.getItem(STORAGE_KEYS.progress), {});
         const leaderboard = Array.isArray(data.leaderboard)
@@ -4000,12 +4118,8 @@
           leaderboard,
           achievements: Array.isArray(data.achievements) ? data.achievements.filter((item) => typeof item === "string") : [],
           unlockedTypes: Array.isArray(data.unlockedTypes) && data.unlockedTypes.length ? data.unlockedTypes : ["normal"],
-          permanentBoosts: {
-            waveSize: Number.isFinite(data.permanentBoosts && data.permanentBoosts.waveSize) ? data.permanentBoosts.waveSize : 0,
-            waveSpeed: Number.isFinite(data.permanentBoosts && data.permanentBoosts.waveSpeed) ? data.permanentBoosts.waveSpeed : 0,
-            scoreBonus: Number.isFinite(data.permanentBoosts && data.permanentBoosts.scoreBonus) ? data.permanentBoosts.scoreBonus : 0,
-            ultCharge: Number.isFinite(data.permanentBoosts && data.permanentBoosts.ultCharge) ? data.permanentBoosts.ultCharge : 0
-          }
+          selectedGrowthType: TYPE_ORDER.includes(data.selectedGrowthType) ? data.selectedGrowthType : "normal",
+          permanentBoosts: normalizePermanentBoosts(data.permanentBoosts)
         };
       }
 
@@ -5237,18 +5351,14 @@
       }
 
       function renderGrowthButtons() {
-        growthRow.innerHTML = "";
-        GROWTHS.forEach((item) => {
-          const value = app.progress.permanentBoosts[item.key];
-          const btn = document.createElement("button");
-          btn.className = "btn " + (value >= item.max || app.progress.metaCurrency < item.cost ? "btn-secondary" : "btn-accent");
-          btn.textContent = item.label + " " + value + "/" + item.max;
-          btn.addEventListener("click", () => {
-            focusDemoScene(GROWTH_DEMO_SCENES[item.key] || 4);
-            showToast("已切到 " + item.label + " 对应演示", 1.1);
-          });
-          growthRow.appendChild(btn);
+        const selectedType = getSelectedGrowthType();
+        ui.growthTypeStat.textContent = TYPE_LABELS[selectedType];
+        renderGrowthTypeButtons(growthTypeRow, selectedType, (type) => {
+          app.progress.selectedGrowthType = type;
+          saveProgress();
+          syncProgressUI();
         });
+        renderGrowthUpgradeButtons(growthRow, selectedType);
       }
 
       function renderTypeTags() {
@@ -5429,7 +5539,8 @@
             "</div>",
             "<div class='growth-card' style='margin-top:14px'>",
             "<strong>永久成长</strong>",
-            "<p>成长点：" + app.progress.metaCurrency + "</p>",
+            "<p>成长点：" + app.progress.metaCurrency + " · 当前元素：" + TYPE_LABELS[getSelectedGrowthType()] + "</p>",
+            "<div class='growth-row' id='modalGrowthTypeRow'></div>",
             "<div class='growth-row' id='modalGrowthRow'></div>",
             "</div>",
             "<div class='growth-card' style='margin-top:14px'>",
@@ -5457,7 +5568,8 @@
                   leaderboard: [],
                   achievements: [],
                   unlockedTypes: ["normal"],
-                  permanentBoosts: { waveSize: 0, waveSpeed: 0, scoreBonus: 0, ultCharge: 0 }
+                  selectedGrowthType: "normal",
+                  permanentBoosts: createDefaultPermanentBoosts()
                 };
                 saveProgress();
                 syncProgressUI();
@@ -5489,28 +5601,22 @@
           });
         });
 
+        const modalGrowthTypeRow = document.getElementById("modalGrowthTypeRow");
         const modalGrowthRow = document.getElementById("modalGrowthRow");
         const playerNameInput = document.getElementById("playerNameInput");
         const modalLeaderboardList = document.getElementById("modalLeaderboardList");
         const modalAchievementCount = document.getElementById("modalAchievementCount");
         const modalAchievementList = document.getElementById("modalAchievementList");
-        GROWTHS.forEach((item) => {
-          const value = app.progress.permanentBoosts[item.key];
-          const btn = document.createElement("button");
-          btn.className = "btn " + (value >= item.max || app.progress.metaCurrency < item.cost ? "btn-secondary" : "btn-accent");
-          btn.textContent = item.label + " +" + item.cost;
-          btn.disabled = value >= item.max || app.progress.metaCurrency < item.cost;
-          btn.addEventListener("click", () => {
-            if (btn.disabled) {
-              return;
-            }
-            app.progress.metaCurrency -= item.cost;
-            app.progress.permanentBoosts[item.key] += 1;
-            saveProgress();
-            syncProgressUI();
+        const selectedType = getSelectedGrowthType();
+        renderGrowthTypeButtons(modalGrowthTypeRow, selectedType, (type) => {
+          app.progress.selectedGrowthType = type;
+          saveProgress();
+          openSettings();
+        });
+        renderGrowthUpgradeButtons(modalGrowthRow, selectedType, {
+          onUpgrade: () => {
             openSettings();
-          });
-          modalGrowthRow.appendChild(btn);
+          }
         });
 
         if (modalLeaderboardList) {
@@ -5728,7 +5834,7 @@
       }
 
       function addRipple(x, y, type, scale, damageScale, options) {
-        const boosts = app.progress.permanentBoosts;
+        const boosts = getPermanentBoostsForType(type);
         const baseSize = 58 * (1 + boosts.waveSize * 0.06) * app.run.rippleSize;
         const baseSpeed = 240 * (1 + boosts.waveSpeed * 0.05) * app.run.rippleSpeed;
         const baseDamage = (type === "normal" ? 9 : 12) * app.run.rippleDamage;
@@ -5821,7 +5927,8 @@
         const type = player.currentType;
         const emitter = combatEmitterPosition(player);
         const origin = player.id === app.run.localPlayerId ? orb : emitter;
-        const thunderRange = 232 * (1 + app.progress.permanentBoosts.waveSize * 0.06) * app.run.rippleSize;
+        const typeBoosts = getPermanentBoostsForType(type);
+        const thunderRange = 232 * (1 + typeBoosts.waveSize * 0.06) * app.run.rippleSize;
         if (type === "fire") {
           for (let i = 0; i < 8; i += 1) {
             const angle = (Math.PI * 2 * i) / 8;
@@ -6231,7 +6338,8 @@
       }
 
       function permanentBuffEntries() {
-        return Object.entries(app.progress.permanentBoosts)
+        const focusType = app.run && app.run.currentType ? app.run.currentType : getSelectedGrowthType();
+        return Object.entries(getPermanentBoostsForType(focusType))
           .filter(([, value]) => value > 0)
           .map(([key, value]) => {
             const meta = PERMANENT_BUFF_META[key];
@@ -6396,11 +6504,12 @@
         run.players.p2.active = run.coopMode;
         const altTypes = app.progress.unlockedTypes.filter((type) => type !== run.currentType);
         run.players.p2.currentType = altTypes.length ? altTypes[Math.floor(Math.random() * altTypes.length)] : "slash";
-        run.rippleSize = 1 + app.progress.permanentBoosts.waveSize * 0.06;
-        run.rippleSpeed = 1 + app.progress.permanentBoosts.waveSpeed * 0.05;
-        run.scoreMultiplier = 1 + app.progress.permanentBoosts.scoreBonus * 0.06;
-        run.ultimate = app.progress.permanentBoosts.ultCharge * 7;
-        run.energy = 40 + app.progress.permanentBoosts.ultCharge * 3;
+        const currentTypeBoosts = getPermanentBoostsForType(run.currentType);
+        run.rippleSize = 1 + currentTypeBoosts.waveSize * 0.06;
+        run.rippleSpeed = 1 + currentTypeBoosts.waveSpeed * 0.05;
+        run.scoreMultiplier = 1 + currentTypeBoosts.scoreBonus * 0.06;
+        run.ultimate = currentTypeBoosts.ultCharge * 7;
+        run.energy = 40 + currentTypeBoosts.ultCharge * 3;
         getPlayers(run).forEach((player) => {
           player.active = true;
           player.respawnTimer = 0;
@@ -6808,7 +6917,8 @@
         gainEnergy((enemy.kind === "boss" ? 18 : 5 + app.run.combo * 0.2) * energyFactor);
         grantExperience(getEnemyExpReward(enemy));
         const ultGain = enemy.kind === "boss" ? 34 : enemy.kind === "brute" ? 8 : 5;
-        app.run.ultimate = clamp(app.run.ultimate + ultGain * (1 + app.progress.permanentBoosts.ultCharge * 0.07), 0, 100);
+        const currentTypeBoosts = getPermanentBoostsForType(app.run.currentType);
+        app.run.ultimate = clamp(app.run.ultimate + ultGain * (1 + currentTypeBoosts.ultCharge * 0.07), 0, 100);
         app.run.overload = clamp(app.run.overload + 5 + app.run.combo * 0.25, 0, 100);
         app.run.overloadTier = app.run.combo >= 24 ? 3 : app.run.combo >= 16 ? 2 : app.run.combo >= 8 ? 1 : 0;
         const popupColor = enemy.kind === "boss"
