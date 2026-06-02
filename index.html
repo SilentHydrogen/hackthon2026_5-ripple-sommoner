@@ -886,6 +886,14 @@
       text-shadow: 0 2px 12px rgba(0, 0, 0, 0.28);
     }
 
+    .metric-subvalue {
+      margin-top: 2px;
+      min-height: 14px;
+      font-size: 11px;
+      color: rgba(255, 214, 140, 0.9);
+      text-shadow: 0 2px 10px rgba(0, 0, 0, 0.22);
+    }
+
     .bottom-bar {
       position: absolute;
       left: 50%;
@@ -2014,6 +2022,7 @@
         <div class="metric">
           <div class="metric-label">Boss</div>
           <div class="metric-value" id="bossValue">60</div>
+          <div class="metric-subvalue" id="bossComboValue"></div>
         </div>
       </div>
     </header>
@@ -2250,9 +2259,9 @@
       const TYPE_COSTS = {
         normal: 7,
         fire: 10,
-        ice: 12,
-        thunder: 14,
-        blackhole: 18,
+        ice: 11,
+        thunder: 8,
+        blackhole: 16,
         slash: 9
       };
       const AUDIO_FILES = {
@@ -2277,12 +2286,12 @@
         shard: { radius: 11, hp: 42, damage: 11, speed: 42, role: "chase" },
         brute: { radius: 19, hp: 148, damage: 20, speed: 28, role: "tank" },
         splitter: { radius: 15, hp: 70, damage: 11, speed: 34, role: "split" },
-        charger: { radius: 14, hp: 66, damage: 18, speed: 22, role: "dash" },
+        charger: { radius: 14, hp: 48, damage: 18, speed: 22, role: "dash" },
         sniper: { radius: 13, hp: 58, damage: 14, speed: 18, role: "ranged" },
         shield: { radius: 17, hp: 92, damage: 13, speed: 20, role: "shield", shield: 88 },
         jammer: { radius: 16, hp: 86, damage: 12, speed: 22, role: "jam" },
         hazard: { radius: 16, hp: 82, damage: 13, speed: 18, role: "hazard" },
-        boss: { radius: 40, hp: 1100, damage: 30, speed: 40, role: "boss" }
+        boss: { radius: 40, hp: 1100, damage: 30, speed: 30, role: "boss" }
       };
       const BOSS_VARIANTS = [
         { id: "crusher", name: "裂潮巨兽", color: "#ff4d7c" },
@@ -2426,6 +2435,7 @@
         comboValue: document.getElementById("comboValue"),
         coreValue: document.getElementById("coreValue"),
         bossValue: document.getElementById("bossValue"),
+        bossComboValue: document.getElementById("bossComboValue"),
         statusTitle: document.getElementById("statusTitle"),
         statusCopy: document.getElementById("statusCopy"),
         bestScoreStat: document.getElementById("bestScoreStat"),
@@ -3827,6 +3837,7 @@
           comboTimer: 0,
           lastKillTime: -999,
           elapsed: 0,
+          bossClock: 0,
           kills: 0,
           level: 1,
           exp: 0,
@@ -3951,8 +3962,8 @@
             {
               id: "dash",
               title: "闪避位移",
-              action: "当前操作：看到危险圈时，立刻双击或点“闪避”脱离原地。",
-              goal: "完成条件：成功触发 1 次闪避位移。",
+              action: "当前操作：看到危险圈时，立刻双击、右键，或点“闪避”按钮脱离原地。",
+              goal: "完成条件：用双击、右键或“闪避”按钮成功触发 1 次闪避位移。",
               desc: "提示：闪避能穿出包围圈，也是保住双守卫的关键。"
             },
             {
@@ -4031,6 +4042,11 @@
         return boosts && boosts[targetType] ? boosts[targetType] : createEmptyPermanentBoostSet();
       }
 
+      function getGrowthUpgradeCost(item, currentLevel) {
+        const level = Math.max(0, Number(currentLevel) || 0);
+        return item.cost + level * 2 + Math.floor(level / 3);
+      }
+
       function upgradePermanentBoost(type, key) {
         const item = GROWTHS.find((entry) => entry.key === key);
         if (!item || !TYPE_ORDER.includes(type)) {
@@ -4040,13 +4056,14 @@
         if (boosts[key] >= item.max) {
           return { ok: false, reason: "max" };
         }
-        if (app.progress.metaCurrency < item.cost) {
+        const upgradeCost = getGrowthUpgradeCost(item, boosts[key]);
+        if (app.progress.metaCurrency < upgradeCost) {
           return { ok: false, reason: "currency" };
         }
-        app.progress.metaCurrency -= item.cost;
+        app.progress.metaCurrency -= upgradeCost;
         app.progress.permanentBoosts[type][key] += 1;
         saveProgress();
-        return { ok: true, value: app.progress.permanentBoosts[type][key] };
+        return { ok: true, value: app.progress.permanentBoosts[type][key], cost: upgradeCost };
       }
 
       function renderGrowthTypeButtons(container, selectedType, onSelect) {
@@ -4078,19 +4095,22 @@
         targetRow.innerHTML = "";
         GROWTHS.forEach((item) => {
           const value = boosts[item.key];
-          const canUpgrade = value < item.max && app.progress.metaCurrency >= item.cost;
+          const nextCost = getGrowthUpgradeCost(item, value);
+          const canUpgrade = value < item.max && app.progress.metaCurrency >= nextCost;
           const btn = document.createElement("button");
           btn.className = "btn " + (canUpgrade ? "btn-accent" : "btn-secondary");
-          btn.textContent = item.label + " " + value + "/" + item.max + " · " + item.cost + "点";
-          btn.title = TYPE_LABELS[selectedType] + " · " + item.desc;
-          btn.disabled = !canUpgrade;
+          btn.textContent = value >= item.max
+            ? item.label + " " + value + "/" + item.max + " · 已满"
+            : item.label + " " + value + "/" + item.max + " · " + nextCost + "点";
+          btn.title = TYPE_LABELS[selectedType] + " · " + item.desc + (value >= item.max ? " · 已满级" : " · 下一次升级消耗 " + nextCost + " 点");
+          btn.disabled = value >= item.max || !canUpgrade;
           btn.addEventListener("click", () => {
             const result = upgradePermanentBoost(selectedType, item.key);
             if (!result.ok) {
               return;
             }
             focusDemoScene(GROWTH_DEMO_SCENES[item.key] || 4);
-            showToast(TYPE_LABELS[selectedType] + " · " + item.label + "提升至 Lv." + result.value, 1.2);
+            showToast(TYPE_LABELS[selectedType] + " · " + item.label + "提升至 Lv." + result.value + " (-" + result.cost + ")", 1.2);
             syncProgressUI();
             if (typeof config.onUpgrade === "function") {
               config.onUpgrade();
@@ -4146,8 +4166,43 @@
         return app.run.tutorial.steps.find((step) => !app.run.tutorial.completed[step.id]) || null;
       }
 
+      function tutorialSpawnProfile() {
+        const step = currentTutorialStep();
+        if (!step) {
+          return null;
+        }
+        if (step.id === "ultimate") {
+          return {
+            cap: 6,
+            rate: 0.78,
+            kind: "shard",
+            extraChance: 0.58,
+            hpMultiplier: 0.45,
+            speedMultiplier: 0.82,
+            damageMultiplier: 0.65,
+            energyMultiplier: 1.45,
+            ultimateMultiplier: 1.75
+          };
+        }
+        return {
+          cap: step.id === "drag" ? 3 : 2,
+          rate: step.id === "drag" ? 1.85 : 2.15,
+          kind: "shard",
+          extraChance: step.id === "drag" ? 0.18 : 0,
+          hpMultiplier: 0.58,
+          speedMultiplier: 0.74,
+          damageMultiplier: 0.6,
+          energyMultiplier: 1,
+          ultimateMultiplier: 1
+        };
+      }
+
       function completeTutorialStep(stepId) {
         if (!app.run || !app.run.tutorial || !app.run.tutorial.active || !stepId) {
+          return;
+        }
+        const current = currentTutorialStep();
+        if (!current || current.id !== stepId) {
           return;
         }
         if (app.run.tutorial.completed[stepId]) {
@@ -4245,11 +4300,13 @@
           }, null)
           : null;
         if (current.id === "cast" && nearestEnemy) {
+          const offsetDir = normalize(player.x - nearestEnemy.x, player.y - nearestEnemy.y);
+          const focusDistance = nearestEnemy.radius + 26;
           return {
-            x: nearestEnemy.x,
-            y: nearestEnemy.y,
-            radius: nearestEnemy.radius + 18,
-            label: "点这里攻击",
+            x: nearestEnemy.x + offsetDir.x * focusDistance,
+            y: nearestEnemy.y + offsetDir.y * focusDistance,
+            radius: 22,
+            label: "点敌人旁边",
             color: "rgba(255,214,120,0.95)"
           };
         }
@@ -5833,6 +5890,23 @@
         return type === "normal" ? cost * 0.5 : cost;
       }
 
+      function getBossComboDamageMultiplier(enemy) {
+        if (!enemy || enemy.kind !== "boss") {
+          return 1;
+        }
+        const comboBonus = Math.max(0, app.run.combo - 4);
+        return clamp(1 + comboBonus * 0.025, 1, 1.35);
+      }
+
+      function getBossDamageMultiplier(enemy, fromUltimate) {
+        if (!enemy || enemy.kind !== "boss") {
+          return 1;
+        }
+        const comboMultiplier = getBossComboDamageMultiplier(enemy);
+        const ultimateMultiplier = fromUltimate ? 1.22 : 1;
+        return clamp(comboMultiplier * ultimateMultiplier, 1, 1.6);
+      }
+
       function addRipple(x, y, type, scale, damageScale, options) {
         const boosts = getPermanentBoostsForType(type);
         const baseSize = 58 * (1 + boosts.waveSize * 0.06) * app.run.rippleSize;
@@ -5885,7 +5959,7 @@
         } else if (type === "thunder") {
           ripple.width *= 0.11;
           ripple.speed *= 1.14;
-          ripple.damage *= 0.9;
+          ripple.damage *= 1.05;
           ripple.life = 0.55;
           ripple.maxLife = 0.55;
         } else if (type === "blackhole") {
@@ -5936,7 +6010,7 @@
             spawnFireZone(origin.x + Math.cos(angle) * 110, origin.y + Math.sin(angle) * 110, 54, 6.5, 18, 0.35, { fromUltimate: true });
           }
           spawnFireZone(origin.x, origin.y, 120, 7.5, 22, 0.15, { fromUltimate: true });
-          spawnExplosion(origin.x, origin.y, 300, 180, TYPE_COLORS.fire, true);
+          spawnExplosion(origin.x, origin.y, 300, 180, TYPE_COLORS.fire, true, { fromUltimate: true });
         } else if (type === "ice") {
           addRipple(emitter.x, emitter.y - 120, "ice", 2.75, 2.4, { fromUltimate: true, origin: emitter, visualMode: "ice-cross" });
           addRipple(emitter.x, emitter.y + 120, "ice", 2.75, 2.4, { fromUltimate: true, origin: emitter, visualMode: "ice-cross" });
@@ -5954,33 +6028,35 @@
             );
           }
           for (let i = 0; i < 3; i += 1) {
-            spawnExplosion(emitter.x, emitter.y, 220 + i * 55, 110 + i * 18, TYPE_COLORS.ice, i !== 0);
+            spawnExplosion(emitter.x, emitter.y, 220 + i * 55, 110 + i * 18, TYPE_COLORS.ice, i !== 0, { fromUltimate: true });
           }
           app.run.enemies.forEach((enemy) => {
             enemy.frozen = Math.max(enemy.frozen, 4.4);
             enemy.freezeStacks = (enemy.freezeStacks || 0) + 3;
-            enemy.hp -= 50;
+            const dealt = 50 * getBossDamageMultiplier(enemy, true);
+            enemy.hp -= dealt;
             enemy.lastHitType = "ice";
             enemy.lastHitFromUltimate = true;
-            spawnDamageNumber(50, enemy.x, enemy.y - enemy.radius - 10, TYPE_COLORS.ice);
+            spawnDamageNumber(dealt, enemy.x, enemy.y - enemy.radius - 10, TYPE_COLORS.ice);
           });
-          spawnExplosion(emitter.x, emitter.y, 380, 168, TYPE_COLORS.ice, true);
+          spawnExplosion(emitter.x, emitter.y, 380, 168, TYPE_COLORS.ice, true, { fromUltimate: true });
         } else if (type === "thunder") {
           addRipple(origin.x, origin.y, "thunder", 3.1, 0.01, { fromUltimate: true, visualMode: "storm" });
           addRipple(origin.x, origin.y, "thunder", 4.4, 0.01, { fromUltimate: true, visualMode: "storm" });
-          spawnExplosion(origin.x, origin.y, thunderRange * 0.72, 188, TYPE_COLORS.thunder, true);
-          spawnExplosion(origin.x, origin.y, thunderRange, 124, TYPE_COLORS.thunder, false);
+          spawnExplosion(origin.x, origin.y, thunderRange * 0.72, 188, TYPE_COLORS.thunder, true, { fromUltimate: true });
+          spawnExplosion(origin.x, origin.y, thunderRange, 124, TYPE_COLORS.thunder, false, { fromUltimate: true });
           app.run.enemies
             .map((enemy) => ({ enemy, dist: distance(origin.x, origin.y, enemy.x, enemy.y) }))
             .filter((item) => item.dist < thunderRange)
             .sort((a, b) => a.dist - b.dist)
             .slice(0, 10)
             .forEach(({ enemy }) => {
-            enemy.hp -= 62;
+            const dealt = 62 * getBossDamageMultiplier(enemy, true);
+            enemy.hp -= dealt;
             enemy.lastHitType = "thunder";
             enemy.lastHitFromUltimate = true;
-            spawnDamageNumber(62, enemy.x, enemy.y - enemy.radius - 10, TYPE_COLORS.thunder);
-            chainThunder(enemy, 28, 2 + Math.floor(app.run.thunderChains / 3), true);
+            spawnDamageNumber(dealt, enemy.x, enemy.y - enemy.radius - 10, TYPE_COLORS.thunder);
+            chainThunder(enemy, 28 * getBossDamageMultiplier(enemy, true), 2 + Math.floor(app.run.thunderChains / 3), true);
             });
           for (let i = 0; i < 14; i += 1) {
             const angle = (Math.PI * 2 * i) / 14 + app.ambientTime * 0.35;
@@ -6007,7 +6083,7 @@
         } else if (type === "blackhole") {
           addRipple(origin.x, origin.y, "blackhole", 4.4, 3.6, { fromUltimate: true });
           addRipple(origin.x, origin.y, "blackhole", 5, 4.05, { fromUltimate: true, visualMode: "maelstrom" });
-          spawnExplosion(origin.x, origin.y, 640, 260, TYPE_COLORS.blackhole, true);
+          spawnExplosion(origin.x, origin.y, 640, 260, TYPE_COLORS.blackhole, true, { fromUltimate: true });
         } else if (type === "slash") {
           const rayCount = 12;
           for (let i = 0; i < rayCount; i += 1) {
@@ -6016,15 +6092,16 @@
             const y = emitter.y + Math.sin(angle) * 220;
             addRipple(x, y, "slash", 2.15, 2.8, { fromUltimate: true, origin: emitter });
           }
-          spawnExplosion(emitter.x, emitter.y, 300, 168, TYPE_COLORS.slash, true);
+          spawnExplosion(emitter.x, emitter.y, 300, 168, TYPE_COLORS.slash, true, { fromUltimate: true });
         } else {
           addRipple(origin.x, origin.y, "normal", 1.2, 2.2, { fromUltimate: true });
-          spawnExplosion(origin.x, origin.y, 130, 140, TYPE_COLORS.normal, true);
+          spawnExplosion(origin.x, origin.y, 130, 140, TYPE_COLORS.normal, true, { fromUltimate: true });
           app.run.enemies.forEach((enemy) => {
-            enemy.hp -= 120;
+            const dealt = 120 * getBossDamageMultiplier(enemy, true);
+            enemy.hp -= dealt;
             enemy.lastHitType = "normal";
             enemy.lastHitFromUltimate = true;
-            spawnDamageNumber(120, enemy.x, enemy.y - enemy.radius - 10, TYPE_COLORS.normal);
+            spawnDamageNumber(dealt, enemy.x, enemy.y - enemy.radius - 10, TYPE_COLORS.normal);
           });
         }
         flashScreen(0.42);
@@ -6072,8 +6149,8 @@
           }
           app.run.coreHp = Math.min(app.run.coreMaxHp, app.run.coreHp + 10);
           player.shield = Math.min(player.maxShield, player.shield + 12);
-          gainEnergy(18);
-          spawnPopup("获得补给", pickup.x, pickup.y - 10, "rgba(124,232,255,0.95)");
+          gainEnergy(24);
+          spawnPopup("补给 +能量", pickup.x, pickup.y - 10, "rgba(124,232,255,0.95)");
           playBufferedSound("pickup", { cooldownKey: "pickup", minInterval: 0.14, volume: 0.8 });
           return false;
         });
@@ -6143,25 +6220,31 @@
       function spawnEnemy(kind, x, y) {
         const player = nearestPlayerTarget(x, y, app.run, true) || getLocalPlayer();
         const def = ENEMY_DEFS[kind] || ENEMY_DEFS.shard;
+        const tutorialProfile = tutorialSpawnProfile();
+        const bossWaveIndex = kind === "boss" ? app.run.bossWave + 1 : app.run.bossWave;
         const dx = player.x - x;
         const dy = player.y - y;
         const dir = normalize(dx, dy);
-        const dangerBoost = 1 + app.run.elapsed * 0.016 + Math.max(0, app.run.dangerLevel - 1) * 0.035;
-        const hpScale = 1 + app.run.elapsed * 0.018 + Math.max(0, app.run.dangerLevel - 1) * 0.24;
-        const damageScale = 1 + app.run.elapsed * 0.01 + Math.max(0, app.run.dangerLevel - 1) * 0.16;
-        const bossHpScale = 1 + app.run.bossWave * 0.55 + app.run.elapsed * 0.018;
-        const bossDamageScale = 1 + app.run.bossWave * 0.18 + app.run.elapsed * 0.012;
+        const dangerBoost = 1 + app.run.elapsed * 0.013 + Math.max(0, app.run.dangerLevel - 1) * 0.03;
+        const hpScale = 1 + app.run.elapsed * 0.016 + Math.max(0, app.run.dangerLevel - 1) * 0.22;
+        const damageScale = 1 + app.run.elapsed * 0.009 + Math.max(0, app.run.dangerLevel - 1) * 0.15;
+        const bossHpScale = 1 + bossWaveIndex * 0.22 + Math.max(0, bossWaveIndex - 1) * 0.12 + app.run.elapsed * 0.007;
+        const bossDamageScale = 1 + bossWaveIndex * 0.12 + Math.max(0, bossWaveIndex - 1) * 0.05 + app.run.elapsed * 0.006;
+        const earlyMoveScale = kind === "boss" ? 1 : clamp(0.9 + app.run.elapsed / 90 * 0.1, 0.9, 1);
+        const tutorialSpeedScale = tutorialProfile && kind !== "boss" ? tutorialProfile.speedMultiplier : 1;
+        const tutorialHpScale = tutorialProfile && kind !== "boss" ? tutorialProfile.hpMultiplier : 1;
+        const tutorialDamageScale = tutorialProfile && kind !== "boss" ? tutorialProfile.damageMultiplier : 1;
         const enemy = {
           id: Math.random(),
           kind,
           x,
           y,
-          vx: dir.x * def.speed * dangerBoost,
-          vy: dir.y * def.speed * dangerBoost,
+          vx: dir.x * def.speed * dangerBoost * earlyMoveScale * tutorialSpeedScale,
+          vy: dir.y * def.speed * dangerBoost * earlyMoveScale * tutorialSpeedScale,
           radius: kind === "boss" ? def.radius + app.run.bossWave * 2 : def.radius,
-          hp: kind === "boss" ? def.hp * bossHpScale : def.hp * hpScale,
-          maxHp: kind === "boss" ? def.hp * bossHpScale : def.hp * hpScale,
-          damage: def.damage * (kind === "boss" ? bossDamageScale : damageScale),
+          hp: kind === "boss" ? def.hp * bossHpScale : def.hp * hpScale * tutorialHpScale,
+          maxHp: kind === "boss" ? def.hp * bossHpScale : def.hp * hpScale * tutorialHpScale,
+          damage: def.damage * (kind === "boss" ? bossDamageScale : damageScale * tutorialDamageScale),
           frozen: 0,
           burning: 0,
           freezeStacks: 0,
@@ -6181,6 +6264,7 @@
           enemy.bossVariant = variant.id;
           enemy.bossName = variant.name;
           enemy.bossColor = variant.color;
+          enemy.bossSpawnedAt = app.run.elapsed;
           if (variant.id === "crusher") {
             enemy.radius *= 1.12;
             enemy.hp *= 1.18;
@@ -6254,7 +6338,8 @@
         applyShake(12);
       }
 
-      function spawnExplosion(x, y, radius, damage, color, heavy) {
+      function spawnExplosion(x, y, radius, damage, color, heavy, options) {
+        const config = options || {};
         const count = isLowPerformanceMode() ? 12 : heavy ? 42 : 24;
         const rgb = hexToRgb(color);
         for (let i = 0; i < count; i += 1) {
@@ -6277,7 +6362,7 @@
             return;
           }
           const ratio = 1 - dist / (radius + enemy.radius);
-          const dealt = damage * ratio;
+          const dealt = damage * ratio * getBossDamageMultiplier(enemy, !!config.fromUltimate);
           enemy.hp -= dealt;
           if (dealt > 0) {
             spawnDamageNumber(dealt, enemy.x, enemy.y - enemy.radius - 10, color);
@@ -6455,8 +6540,12 @@
         if (ui.dashText) {
           ui.dashText.textContent = app.run.player.dashCooldown > 0 ? app.run.player.dashCooldown.toFixed(1) + "s" : "就绪";
         }
-        const bossCountdown = app.run.bossActive ? "BOSS" : String(Math.max(0, Math.ceil(app.run.nextBossAt - app.run.elapsed)));
+        const bossCountdown = app.run.bossActive ? "BOSS" : String(Math.max(0, Math.ceil(app.run.nextBossAt - app.run.bossClock)));
         ui.bossValue.textContent = bossCountdown;
+        if (ui.bossComboValue) {
+          const bossComboBonus = Math.round((getBossComboDamageMultiplier({ kind: "boss" }) - 1) * 100);
+          ui.bossComboValue.textContent = app.run.bossActive ? ("连击+" + bossComboBonus + "%  大招+22%") : "";
+        }
         ui.hudTitle.textContent = app.run.bossActive ? "首领来袭 " + app.run.bossWave : "源核守卫";
         ui.hudCopy.textContent = app.run.bossActive
           ? "巨型结晶已抵达，优先打爆 Boss，核心上的能量球蓄满后可点按释放大招。"
@@ -6904,6 +6993,9 @@
         const base = enemy.kind === "boss" ? 520 : enemy.kind === "brute" ? 70 : enemy.kind === "shield" ? 64 : enemy.kind === "sniper" ? 56 : enemy.kind === "charger" ? 48 : enemy.kind === "jammer" ? 58 : enemy.kind === "hazard" ? 54 : enemy.kind === "splitter" ? 42 : 24;
         const now = performance.now() / 1000;
         const energyFactor = enemy.lastHitFromUltimate ? 1 / 3 : 1;
+        const tutorialProfile = tutorialSpawnProfile();
+        const tutorialEnergyMultiplier = tutorialProfile ? tutorialProfile.energyMultiplier : 1;
+        const tutorialUltimateMultiplier = tutorialProfile ? tutorialProfile.ultimateMultiplier : 1;
         if (now - app.run.lastKillTime < 3) {
           app.run.combo = Math.min(app.run.combo + 1, 999);
         } else {
@@ -6914,11 +7006,11 @@
         app.run.bestCombo = Math.max(app.run.bestCombo, app.run.combo);
         app.run.kills += enemy.kind === "boss" ? 10 : 1;
         app.run.score += base * app.run.combo * app.run.scoreMultiplier;
-        gainEnergy((enemy.kind === "boss" ? 18 : 5 + app.run.combo * 0.2) * energyFactor);
+        gainEnergy((enemy.kind === "boss" ? 18 : 5 + app.run.combo * 0.2) * energyFactor * tutorialEnergyMultiplier);
         grantExperience(getEnemyExpReward(enemy));
         const ultGain = enemy.kind === "boss" ? 34 : enemy.kind === "brute" ? 8 : 5;
         const currentTypeBoosts = getPermanentBoostsForType(app.run.currentType);
-        app.run.ultimate = clamp(app.run.ultimate + ultGain * (1 + currentTypeBoosts.ultCharge * 0.07), 0, 100);
+        app.run.ultimate = clamp(app.run.ultimate + ultGain * (1 + currentTypeBoosts.ultCharge * 0.07) * tutorialUltimateMultiplier, 0, 100);
         app.run.overload = clamp(app.run.overload + 5 + app.run.combo * 0.25, 0, 100);
         app.run.overloadTier = app.run.combo >= 24 ? 3 : app.run.combo >= 16 ? 2 : app.run.combo >= 8 ? 1 : 0;
         const popupColor = enemy.kind === "boss"
@@ -6955,7 +7047,7 @@
         } else if (hitType === "ice") {
           spawnExplosion(enemy.x, enemy.y, 68, 34 + 16 * app.run.freezeBonus, TYPE_COLORS.ice, false);
         } else if (hitType === "thunder") {
-          chainThunder(enemy, 22, Math.max(1, app.run.thunderChains - 1));
+          chainThunder(enemy, 26, Math.max(1, app.run.thunderChains - 1));
         } else if (hitType === "slash") {
           spawnLightningArc(enemy.x - 42, enemy.y - 10, enemy.x + 42, enemy.y + 10, 0.12, TYPE_COLORS.slash);
         }
@@ -6986,10 +7078,14 @@
           if (!next) {
             break;
           }
-          next.enemy.hp -= currentDamage;
+          const dealt = currentDamage * getBossDamageMultiplier(next.enemy, !!fromUltimate);
+          next.enemy.hp -= dealt;
           next.enemy.lastHitType = "thunder";
           next.enemy.lastHitFromUltimate = !!fromUltimate;
           spawnPopup("雷链", next.enemy.x, next.enemy.y - 8, TYPE_COLORS.thunder);
+          if (dealt > 0) {
+            spawnDamageNumber(dealt, next.enemy.x, next.enemy.y - next.enemy.radius - 10, TYPE_COLORS.thunder);
+          }
           spawnLightningArc(current.x, current.y, next.enemy.x, next.enemy.y, 0.14, TYPE_COLORS.thunder);
           current = next.enemy;
           visited.add(current.id);
@@ -7019,16 +7115,16 @@
         }
         if (ripple.type === "fire") {
           damage *= 0.72;
+          enemy.burning = Math.max(enemy.burning, enemy.kind === "boss" ? 2.6 : 1.4 + app.run.fireSpread * 0.25);
           if (enemy.kind !== "boss") {
-            enemy.burning = Math.max(enemy.burning, 1.4 + app.run.fireSpread * 0.25);
             spawnFireZone(enemy.x, enemy.y, 24 * app.run.fireZoneScale, 2.2, 8 + app.run.fireSpread * 2, 0.32);
           }
         } else if (ripple.type === "ice") {
           enemy.frozen = Math.max(enemy.frozen, 1.5 + app.run.freezeBonus);
           enemy.freezeStacks = (enemy.freezeStacks || 0) + 1;
         } else if (ripple.type === "thunder") {
-          damage *= 0.8;
-          chainThunder(enemy, ripple.damage * 0.55, Math.max(1, app.run.thunderChains - 1));
+          damage *= 0.9;
+          chainThunder(enemy, ripple.damage * 0.65, Math.max(1, app.run.thunderChains - 1));
         } else if (ripple.type === "blackhole") {
           damage *= 1.5;
         } else if (ripple.type === "slash") {
@@ -7039,6 +7135,7 @@
         }
         enemy.lastHitType = ripple.type;
         enemy.lastHitFromUltimate = !!ripple.fromUltimate;
+        damage *= getBossDamageMultiplier(enemy, !!ripple.fromUltimate);
         enemy.hp -= damage;
         playBufferedSound("enemy_hit", {
           cooldownKey: "enemy-hit",
@@ -7054,13 +7151,13 @@
           enemy.vy -= push.y * 165 * bossKnockbackScale;
         } else {
           const bossScale = enemy.kind === "boss" ? (enemy.hp / enemy.maxHp > 0.5 ? 0.22 : 0.56) : 1;
-          const pushForce = ripple.type === "slash" ? 55 : ripple.type === "normal" ? 40 : ripple.type === "thunder" ? 60 : ripple.type === "fire" ? 40 : 120;
+          const pushForce = ripple.type === "slash" ? 55 : ripple.type === "normal" ? 46 : ripple.type === "thunder" ? 42 : ripple.type === "fire" ? 38 : 112;
           enemy.vx += push.x * pushForce * bossScale * bossKnockbackScale;
           enemy.vy += push.y * pushForce * bossScale * bossKnockbackScale;
         }
         if (enemy.kind === "boss") {
           const bossPostSpeed = Math.hypot(enemy.vx, enemy.vy) || 1;
-          const bossMaxSpeed = Math.max(42, bossPreSpeed * 1.08);
+          const bossMaxSpeed = Math.max(36, bossPreSpeed * 1.06);
           if (bossPostSpeed > bossMaxSpeed) {
             const ratio = bossMaxSpeed / bossPostSpeed;
             enemy.vx *= ratio;
@@ -7164,7 +7261,7 @@
 
           if (ripple.life <= 0 && ripple.type === "blackhole" && !ripple.exploded) {
             ripple.exploded = true;
-            spawnExplosion(ripple.x, ripple.y, (ripple.maxRadius || 140 * app.run.blackholeScale) * 1.35, 118, TYPE_COLORS.blackhole, true);
+            spawnExplosion(ripple.x, ripple.y, (ripple.maxRadius || 140 * app.run.blackholeScale) * 1.35, 118, TYPE_COLORS.blackhole, true, { fromUltimate: !!ripple.fromUltimate });
             flashScreen(0.18);
           }
 
@@ -7196,13 +7293,12 @@
           app.run.enemies.forEach((enemy) => {
             const dist = distance(zone.x, zone.y, enemy.x, enemy.y);
             if (dist <= zone.radius + enemy.radius) {
-              enemy.hp -= zone.damage;
-              if (enemy.kind !== "boss") {
-                enemy.burning = Math.max(enemy.burning, 1.2);
-              }
+              const dealt = zone.damage * getBossDamageMultiplier(enemy, !!zone.fromUltimate);
+              enemy.hp -= dealt;
+              enemy.burning = Math.max(enemy.burning, enemy.kind === "boss" ? 1.8 : 1.2);
               enemy.lastHitType = "fire";
               enemy.lastHitFromUltimate = !!zone.fromUltimate;
-              spawnDamageNumber(zone.damage, enemy.x, enemy.y - enemy.radius - 8, TYPE_COLORS.fire);
+              spawnDamageNumber(dealt, enemy.x, enemy.y - enemy.radius - 8, TYPE_COLORS.fire);
             }
           });
           if (app.run.fireSpread > 0 && zone.life > 0.8 && Math.random() < delta * 0.7 * app.run.fireSpread) {
@@ -7318,7 +7414,7 @@
           hazard.tickTimer -= delta;
           if (hazard.tickTimer <= 0) {
             hazard.tickTimer = 0.24;
-            const tickDamage = hazard.damage * 0.24;
+            const tickDamage = hazard.damage * 0.18;
             getPlayers().forEach((player) => {
               if (player.active && distance(hazard.x, hazard.y, player.x, player.y) <= hazard.radius + player.radius) {
                 damagePlayer(player, tickDamage, hazard.x, hazard.y);
@@ -7508,8 +7604,8 @@
                 player.shield = Math.min(player.maxShield, player.shield + 8);
               });
             }
-            gainEnergy(18);
-            spawnPopup("获得补给", pickup.x, pickup.y - 10, "rgba(124,232,255,0.95)");
+            gainEnergy(24);
+            spawnPopup("补给 +能量", pickup.x, pickup.y - 10, "rgba(124,232,255,0.95)");
             playBufferedSound("pickup", { cooldownKey: "pickup", minInterval: 0.14, volume: 0.8 });
             return false;
           }
@@ -7542,6 +7638,7 @@
           const targetPlayer = nearestPlayerTarget(enemy.x, enemy.y, app.run, false) || getLocalPlayer();
           const towardPlayer = normalize(targetPlayer.x - enemy.x, targetPlayer.y - enemy.y);
           const moveFactor = enemy.frozen > 0 ? 0.28 : 1;
+          const earlyMoveScale = enemy.kind === "boss" ? 1 : clamp(0.86 + app.run.elapsed / 95 * 0.14, 0.86, 1);
           if (enemy.role === "dash") {
             if (enemy.state === "idle" && enemy.attackCooldown <= 0) {
               enemy.state = "charge";
@@ -7558,38 +7655,42 @@
                 enemy.vy = towardPlayer.y * 320;
               }
             } else {
-              enemy.vx += towardPlayer.x * 54 * delta * moveFactor;
-              enemy.vy += towardPlayer.y * 54 * delta * moveFactor;
+              enemy.vx += towardPlayer.x * 54 * delta * moveFactor * earlyMoveScale;
+              enemy.vy += towardPlayer.y * 54 * delta * moveFactor * earlyMoveScale;
             }
           } else if (enemy.role === "ranged") {
             const distToPlayer = distance(enemy.x, enemy.y, targetPlayer.x, targetPlayer.y);
             const pull = distToPlayer < 150 ? -1 : distToPlayer > 240 ? 1 : 0;
-            enemy.vx += towardPlayer.x * 28 * pull * delta * moveFactor;
-            enemy.vy += towardPlayer.y * 28 * pull * delta * moveFactor;
+            enemy.vx += towardPlayer.x * 28 * pull * delta * moveFactor * earlyMoveScale;
+            enemy.vy += towardPlayer.y * 28 * pull * delta * moveFactor * earlyMoveScale;
             if (hasShieldGuard() && enemy.attackCooldown <= 0) {
-              spawnEnemyBullet(enemy.x, enemy.y, targetPlayer.x, targetPlayer.y, 180, enemy.damage, "#ff8aa0", 6);
-              enemy.attackCooldown = 1.8;
+              const sniperScale = clamp(0.6 + app.run.elapsed * 0.008, 0.6, 1);
+              spawnEnemyBullet(enemy.x, enemy.y, targetPlayer.x, targetPlayer.y, 180, enemy.damage * sniperScale, "#ff8aa0", 6);
+              enemy.attackCooldown = clamp(3 - app.run.elapsed * 0.025, 1.8, 3);
             }
           } else if (enemy.role === "shield") {
-            enemy.vx += towardCore.x * 26 * delta * moveFactor;
-            enemy.vy += towardCore.y * 26 * delta * moveFactor;
+            enemy.vx += towardCore.x * 26 * delta * moveFactor * earlyMoveScale;
+            enemy.vy += towardCore.y * 26 * delta * moveFactor * earlyMoveScale;
           } else if (enemy.role === "jam") {
-            enemy.vx += towardPlayer.x * 30 * delta * moveFactor;
-            enemy.vy += towardPlayer.y * 30 * delta * moveFactor;
+            enemy.vx += towardPlayer.x * 30 * delta * moveFactor * earlyMoveScale;
+            enemy.vy += towardPlayer.y * 30 * delta * moveFactor * earlyMoveScale;
           } else if (enemy.role === "hazard") {
-            enemy.vx += towardPlayer.x * 22 * delta * moveFactor;
-            enemy.vy += towardPlayer.y * 22 * delta * moveFactor;
+            enemy.vx += towardPlayer.x * 22 * delta * moveFactor * earlyMoveScale;
+            enemy.vy += towardPlayer.y * 22 * delta * moveFactor * earlyMoveScale;
             if (hasShieldGuard() && enemy.attackCooldown <= 0) {
-              spawnHazard(targetPlayer.x + randomBetween(-32, 32), targetPlayer.y + randomBetween(-32, 32), 40, 3.2, enemy.damage * 10, "acid");
+              spawnHazard(targetPlayer.x + randomBetween(-32, 32), targetPlayer.y + randomBetween(-32, 32), 40, 3.2, enemy.damage * 7, "acid");
               enemy.attackCooldown = 2.8;
             }
           } else if (enemy.role === "boss") {
-            const phaseBoost = enemy.hp / enemy.maxHp < 0.5 ? 1.35 : 1;
+            const bossAge = enemy.bossSpawnedAt !== undefined ? app.run.elapsed - enemy.bossSpawnedAt : 0;
+            const bossMidSlow = clamp(1.3 - bossAge * 0.06, 0.78, 1.3);
+            const phaseBoost = enemy.hp / enemy.maxHp < 0.5 ? 1.15 : 1;
+            const bossSpeedMult = bossMidSlow * phaseBoost;
             if (enemy.bossVariant === "crusher") {
-              enemy.vx += towardCore.x * 66 * delta * phaseBoost * moveFactor;
-              enemy.vy += towardCore.y * 66 * delta * phaseBoost * moveFactor;
+              enemy.vx += towardCore.x * 50 * delta * bossSpeedMult * moveFactor;
+              enemy.vy += towardCore.y * 50 * delta * bossSpeedMult * moveFactor;
               if (hasShieldGuard() && enemy.attackCooldown <= 0) {
-                spawnHazard(targetPlayer.x, targetPlayer.y, 52, 2.6, enemy.damage * 11, "crush");
+                spawnHazard(targetPlayer.x, targetPlayer.y, 52, 2.6, enemy.damage * 8, "crush");
                 enemy.attackCooldown = 1.9;
               }
               if (enemy.summonCooldown <= 0) {
@@ -7598,19 +7699,19 @@
                 enemy.summonCooldown = 6.4;
               }
             } else if (enemy.bossVariant === "storm") {
-              enemy.vx += towardCore.x * 34 * delta * moveFactor;
-              enemy.vy += towardCore.y * 34 * delta * moveFactor;
+              enemy.vx += towardCore.x * 27 * delta * bossSpeedMult * moveFactor;
+              enemy.vy += towardCore.y * 27 * delta * bossSpeedMult * moveFactor;
               if (hasShieldGuard() && enemy.attackCooldown <= 0) {
                 const burst = enemy.hp / enemy.maxHp < 0.5 ? 14 : 10;
                 for (let i = 0; i < burst; i += 1) {
                   const angle = (Math.PI * 2 * i) / burst + enemy.phase * 0.15;
-                  spawnEnemyBullet(enemy.x, enemy.y, enemy.x + Math.cos(angle) * 60, enemy.y + Math.sin(angle) * 60, 178 * phaseBoost, 11, "#c68bff", 7);
+                  spawnEnemyBullet(enemy.x, enemy.y, enemy.x + Math.cos(angle) * 60, enemy.y + Math.sin(angle) * 60, 178 * bossSpeedMult, 11, "#c68bff", 7);
                 }
                 enemy.attackCooldown = enemy.hp / enemy.maxHp < 0.5 ? 0.95 : 1.4;
               }
             } else if (enemy.bossVariant === "brood") {
-              enemy.vx += towardCore.x * 28 * delta * phaseBoost * moveFactor;
-              enemy.vy += towardCore.y * 28 * delta * phaseBoost * moveFactor;
+              enemy.vx += towardCore.x * 22 * delta * bossSpeedMult * moveFactor;
+              enemy.vy += towardCore.y * 22 * delta * bossSpeedMult * moveFactor;
               if (enemy.summonCooldown <= 0) {
                 spawnEnemyAtEdge("splitter");
                 spawnEnemyAtEdge("splitter");
@@ -7618,10 +7719,10 @@
                 enemy.summonCooldown = 4.8;
               }
             } else {
-              enemy.vx += towardCore.x * 44 * delta * phaseBoost * moveFactor;
-              enemy.vy += towardCore.y * 44 * delta * phaseBoost * moveFactor;
+              enemy.vx += towardCore.x * 34 * delta * bossSpeedMult * moveFactor;
+              enemy.vy += towardCore.y * 34 * delta * bossSpeedMult * moveFactor;
               if (hasShieldGuard() && enemy.attackCooldown <= 0) {
-                spawnHazard(targetPlayer.x + randomBetween(-24, 24), targetPlayer.y + randomBetween(-24, 24), 48, 3.5, enemy.damage * 10.5, "siege");
+                spawnHazard(targetPlayer.x + randomBetween(-24, 24), targetPlayer.y + randomBetween(-24, 24), 48, 3.5, enemy.damage * 7.5, "siege");
                 spawnEnemyBullet(enemy.x, enemy.y, targetPlayer.x, targetPlayer.y, 190, enemy.damage, "#75d9ff", 7);
                 enemy.attackCooldown = 1.45;
               }
@@ -7633,8 +7734,8 @@
             }
           } else {
             const chaseBoost = enemy.role === "tank" ? 26 : enemy.role === "split" ? 38 : 42;
-            enemy.vx += towardCore.x * chaseBoost * delta * moveFactor;
-            enemy.vy += towardCore.y * chaseBoost * delta * moveFactor;
+            enemy.vx += towardCore.x * chaseBoost * delta * moveFactor * earlyMoveScale;
+            enemy.vy += towardCore.y * chaseBoost * delta * moveFactor * earlyMoveScale;
           }
           enemy.vx *= enemy.frozen > 0 ? 0.95 : 0.985;
           enemy.vy *= enemy.frozen > 0 ? 0.95 : 0.985;
@@ -7674,36 +7775,43 @@
 
       function updateSpawns(delta) {
         const lowPerf = isLowPerformanceMode();
-        const cap = lowPerf ? 30 : 50;
+        const tutorialProfile = tutorialSpawnProfile();
+        const baseCap = lowPerf ? 30 : 50;
+        const cap = tutorialProfile
+          ? tutorialProfile.cap
+          : Math.min(baseCap, app.run.elapsed < 25 ? 12 : app.run.elapsed < 55 ? 18 : app.run.elapsed < 90 ? 26 : baseCap);
         app.run.dangerLevel = 1 + Math.floor(app.run.elapsed / 22);
         app.run.spawnTimer -= delta;
-        const rate = clamp(1.02 - app.run.elapsed * 0.009, 0.14, 1.02);
+        const rate = tutorialProfile ? tutorialProfile.rate : clamp(1.28 - app.run.elapsed * 0.007, 0.2, 1.28);
         if (app.run.spawnTimer <= 0 && app.run.enemies.length < cap) {
           const roll = Math.random();
-          let kind = roll > 0.94 ? "brute" : roll > 0.78 ? "splitter" : "shard";
-          if (app.run.elapsed > 20 && roll > 0.7) {
+          let kind = tutorialProfile ? tutorialProfile.kind : (roll > 0.95 ? "brute" : roll > 0.8 ? "splitter" : "shard");
+          if (!tutorialProfile && app.run.elapsed > 26 && roll > 0.72) {
             kind = "charger";
           }
-          if (app.run.elapsed > 40 && roll > 0.78) {
+          if (!tutorialProfile && app.run.elapsed > 52 && roll > 0.8) {
             kind = "sniper";
           }
-          if (app.run.elapsed > 55 && roll > 0.84) {
+          if (!tutorialProfile && app.run.elapsed > 68 && roll > 0.85) {
             kind = "shield";
           }
-          if (app.run.elapsed > 70 && roll > 0.88) {
+          if (!tutorialProfile && app.run.elapsed > 84 && roll > 0.89) {
             kind = Math.random() > 0.5 ? "jammer" : "hazard";
           }
           spawnEnemyAtEdge(kind);
-          if (Math.random() > 0.6 && app.run.elapsed > 18 && app.run.enemies.length < cap - 1) {
-            spawnEnemyAtEdge(app.run.elapsed > 45 && Math.random() > 0.5 ? "charger" : (Math.random() > 0.68 ? "shard" : "splitter"));
+          if (tutorialProfile && tutorialProfile.extraChance > 0 && Math.random() < tutorialProfile.extraChance && app.run.enemies.length < cap - 1) {
+            spawnEnemyAtEdge("shard");
           }
-          if (app.run.elapsed > 80 && Math.random() > 0.74 && app.run.enemies.length < cap - 2) {
+          if (!tutorialProfile && Math.random() > 0.72 && app.run.elapsed > 26 && app.run.enemies.length < cap - 1) {
+            spawnEnemyAtEdge(app.run.elapsed > 52 && Math.random() > 0.52 ? "charger" : (Math.random() > 0.72 ? "shard" : "splitter"));
+          }
+          if (!tutorialProfile && app.run.elapsed > 95 && Math.random() > 0.8 && app.run.enemies.length < cap - 2) {
             spawnEnemyAtEdge(Math.random() > 0.5 ? "shield" : "sniper");
           }
           app.run.spawnTimer = rate;
         }
 
-        if (app.run.elapsed >= app.run.nextBossAt) {
+        if (app.run.bossClock >= app.run.nextBossAt) {
           app.run.nextBossAt += BOSS_INTERVAL;
           spawnBoss();
         }
@@ -7776,6 +7884,9 @@
           delta *= 0.42;
         }
         app.run.elapsed += delta;
+        if (!(app.run.tutorial && app.run.tutorial.active)) {
+          app.run.bossClock += delta;
+        }
         collectLocalInputFrames(app.run);
         flushLocalRelayBridge(app.run);
         flushPendingInputFrames(app.run);
